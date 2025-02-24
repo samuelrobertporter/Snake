@@ -1,0 +1,249 @@
+import pygame
+import random
+import os
+
+# Fenstergröße
+WIDTH = 600
+HEIGHT = 400
+GRID_SIZE = 20
+ROWS = HEIGHT // GRID_SIZE
+COLS = WIDTH // GRID_SIZE
+
+# Farben (RGB)
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+RED = (255, 0, 0)
+BLUE = (0, 0, 255)
+YELLOW = (255, 255, 0)
+GREEN = (0, 255, 0)
+
+# Zusätzliche Farben für die Schlange
+COLORS = [
+    (0, 255, 0),    # Grün (Startfarbe)
+    (255, 165, 0),  # Orange
+    (128, 0, 128),  # Lila
+    (0, 255, 255),  # Cyan
+    (255, 215, 0),  # Gold
+    (255, 20, 147), # Pink
+]
+
+# Richtungsvorgaben
+UP = (0, -1)
+DOWN = (0, 1)
+LEFT = (-1, 0)
+RIGHT = (1, 0)
+
+class SnakeGame:
+    def __init__(self):
+        pygame.init()
+        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        pygame.display.set_caption("Snake 🐍")
+        self.clock = pygame.time.Clock()
+
+        self.reset_game()  # Initiale Spielzustände setzen
+        self.highscore = self.load_highscore()
+
+        self.manual_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 - 40, 200, 40)
+        self.auto_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 10, 200, 40)
+        self.restart_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 60, 200, 40)
+
+    def reset_game(self):
+        """Setzt das Spiel auf den Anfangszustand zurück"""
+        self.running = True
+        self.auto_mode = False
+        self.score = 0
+        self.snake = [(0, 0)]
+        self.snake_colors = [COLORS[0]]
+        self.path = self.generate_snake_path()
+        self.path_index = 1
+        self.food = self.spawn_food()
+        self.direction = RIGHT
+        self.game_over = False
+
+    def spawn_food(self):
+        while True:
+            food_pos = (random.randint(0, COLS-1) * GRID_SIZE, 
+                       random.randint(0, ROWS-1) * GRID_SIZE)
+            if food_pos not in self.snake:
+                return food_pos
+
+    def load_highscore(self):
+        if os.path.exists("highscore.txt"):
+            with open("highscore.txt", "r") as file:
+                return int(file.read().strip())
+        return 0
+
+    def save_highscore(self):
+        with open("highscore.txt", "w") as file:
+            file.write(str(self.highscore))
+
+    def generate_snake_path(self):
+        path = []
+        for row in range(ROWS):
+            if row % 2 == 0:
+                for col in range(COLS):
+                    path.append((col * GRID_SIZE, row * GRID_SIZE))
+            else:
+                for col in reversed(range(COLS)):
+                    path.append((col * GRID_SIZE, row * GRID_SIZE))
+        return path
+
+    def move(self):
+        if self.auto_mode:
+            self.auto_move()
+        else:
+            self.manual_move()
+
+    def auto_move(self):
+        if len(self.snake) >= ROWS * COLS or self.game_over:
+            self.game_over = True
+            return
+
+        head_x, head_y = self.snake[0]
+        food_x, food_y = self.food
+        
+        possible_moves = []
+        if food_x > head_x and (head_x + GRID_SIZE, head_y) not in self.snake[1:]:
+            possible_moves.append((head_x + GRID_SIZE, head_y))
+        if food_x < head_x and (head_x - GRID_SIZE, head_y) not in self.snake[1:]:
+            possible_moves.append((head_x - GRID_SIZE, head_y))
+        if food_y > head_y and (head_x, head_y + GRID_SIZE) not in self.snake[1:]:
+            possible_moves.append((head_x, head_y + GRID_SIZE))
+        if food_y < head_y and (head_x, head_y - GRID_SIZE) not in self.snake[1:]:
+            possible_moves.append((head_x, head_y - GRID_SIZE))
+
+        if not possible_moves:
+            directions = [RIGHT, LEFT, DOWN, UP]
+            for dx, dy in directions:
+                test_head = (head_x + dx * GRID_SIZE, head_y + dy * GRID_SIZE)
+                if (test_head not in self.snake and 
+                    0 <= test_head[0] < WIDTH and 
+                    0 <= test_head[1] < HEIGHT):
+                    possible_moves.append(test_head)
+                    break
+            else:
+                self.game_over = True
+                if self.score > self.highscore:
+                    self.highscore = self.score
+                    self.save_highscore()
+                return
+
+        new_head = possible_moves[0] if possible_moves else self.snake[0]
+        
+        color_index = min(self.score // 10, len(COLORS) - 1)
+        self.snake_colors.insert(0, COLORS[color_index])
+        self.snake.insert(0, new_head)
+
+        if new_head == self.food:
+            self.food = self.spawn_food()
+            self.score += 1
+        else:
+            self.snake.pop()
+            self.snake_colors.pop()
+
+    def manual_move(self):
+        head_x, head_y = self.snake[0]
+        dx, dy = self.direction
+        new_head = (head_x + dx * GRID_SIZE, head_y + dy * GRID_SIZE)
+
+        if (new_head[0] < 0 or new_head[0] >= WIDTH or
+            new_head[1] < 0 or new_head[1] >= HEIGHT or
+            new_head in self.snake):
+            self.game_over = True
+            if self.score > self.highscore:
+                self.highscore = self.score
+                self.save_highscore()
+            return
+
+        color_index = min(self.score // 10, len(COLORS) - 1)
+        self.snake_colors.insert(0, COLORS[color_index])
+        self.snake.insert(0, new_head)
+
+        if new_head == self.food:
+            self.food = self.spawn_food()
+            self.score += 1
+        else:
+            self.snake.pop()
+            self.snake_colors.pop()
+
+    def draw_text(self, text, x, y, size=24, color=WHITE):
+        font = pygame.font.Font(None, size)
+        text_surface = font.render(text, True, color)
+        self.screen.blit(text_surface, (x, y))
+
+    def render(self):
+        self.screen.fill(BLACK)
+        for i, segment in enumerate(self.snake):
+            pygame.draw.rect(self.screen, self.snake_colors[i], (*segment, GRID_SIZE, GRID_SIZE))
+        pygame.draw.rect(self.screen, RED, (*self.food, GRID_SIZE, GRID_SIZE))
+
+        self.draw_text(f"Punkte: {self.score}", 10, 10, 24, WHITE)
+        self.draw_text(f"Highscore: {self.highscore}", WIDTH - 150, 10, 24, YELLOW)
+
+        if self.game_over:
+            self.draw_text("Game Over!", WIDTH // 2 - 60, HEIGHT // 3, 32, WHITE)
+            pygame.draw.rect(self.screen, YELLOW, self.restart_button_rect)
+            self.draw_text("Neustart", WIDTH // 2 - 40, HEIGHT // 2 + 70, 22, BLACK)
+
+        pygame.display.flip()
+
+    def show_start_screen(self):
+        self.screen.fill(BLACK)
+        self.draw_text("Snake Game", WIDTH // 2 - 50, HEIGHT // 3, 32, WHITE)
+        self.draw_text("Wähle einen Modus:", WIDTH // 2 - 80, HEIGHT // 2 - 70, 24, WHITE)
+
+        pygame.draw.rect(self.screen, BLUE, self.manual_button_rect)
+        self.draw_text("Manueller Modus", WIDTH // 2 - 80, HEIGHT // 2 - 30, 22, WHITE)
+
+        pygame.draw.rect(self.screen, GREEN, self.auto_button_rect)
+        self.draw_text("Auto-Solve Modus", WIDTH // 2 - 80, HEIGHT // 2 + 20, 22, WHITE)
+
+        pygame.display.flip()
+
+    def run(self):
+        in_start_screen = True
+        while True:  # Äußere Schleife für Neustarts
+            while in_start_screen:
+                self.show_start_screen()
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        return
+                    if event.type == pygame.MOUSEBUTTONDOWN:
+                        if self.manual_button_rect.collidepoint(event.pos):
+                            self.auto_mode = False
+                            in_start_screen = False
+                        elif self.auto_button_rect.collidepoint(event.pos):
+                            self.auto_mode = True
+                            in_start_screen = False
+
+            while self.running:
+                for event in pygame.event.get():
+                    if event.type == pygame.QUIT:
+                        pygame.quit()
+                        return
+                    if not self.auto_mode and event.type == pygame.KEYDOWN:
+                        if event.key in (pygame.K_w, pygame.K_UP) and self.direction != DOWN:
+                            self.direction = UP
+                        elif event.key in (pygame.K_s, pygame.K_DOWN) and self.direction != UP:
+                            self.direction = DOWN
+                        elif event.key in (pygame.K_a, pygame.K_LEFT) and self.direction != RIGHT:
+                            self.direction = LEFT
+                        elif event.key in (pygame.K_d, pygame.K_RIGHT) and self.direction != LEFT:
+                            self.direction = RIGHT
+                    if self.game_over and event.type == pygame.MOUSEBUTTONDOWN:
+                        if self.restart_button_rect.collidepoint(event.pos):
+                            self.reset_game()
+                            in_start_screen = True
+                            break
+
+                if not self.game_over:
+                    self.move()
+                self.render()
+                self.clock.tick(10)
+
+        pygame.quit()
+
+if __name__ == "__main__":
+    game = SnakeGame()
+    game.run()
