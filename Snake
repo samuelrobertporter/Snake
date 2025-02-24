@@ -42,7 +42,7 @@ class SnakeGame:
         self.clock = pygame.time.Clock()
 
         self.reset_game()
-        self.highscore = self.load_highscore()
+        self.highscores = self.load_highscores()
 
         self.manual_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 - 40, 200, 40)
         self.auto_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 10, 200, 40)
@@ -50,7 +50,6 @@ class SnakeGame:
 
     def reset_game(self):
         self.running = True
-        self.auto_mode = False
         self.score = 0
         self.snake = [(0, 0)]
         self.snake_colors = [COLORS[0]]
@@ -58,6 +57,7 @@ class SnakeGame:
         self.food = self.spawn_food()
         self.direction = RIGHT
         self.game_over = False
+        self.path_index = 0
 
     def spawn_food(self):
         while True:
@@ -66,15 +66,19 @@ class SnakeGame:
             if food_pos not in self.snake:
                 return food_pos
 
-    def load_highscore(self):
-        if os.path.exists("highscore.txt"):
-            with open("highscore.txt", "r") as file:
-                return int(file.read().strip())
-        return 0
+    def load_highscores(self):
+        if os.path.exists("highscores.txt"):
+            with open("highscores.txt", "r") as file:
+                scores = [int(line.strip()) for line in file.readlines() if line.strip()]
+                return sorted(scores, reverse=True)[:5]
+        return [0] * 5
 
-    def save_highscore(self):
-        with open("highscore.txt", "w") as file:
-            file.write(str(self.highscore))
+    def save_highscores(self):
+        self.highscores.append(self.score)
+        self.highscores = sorted(self.highscores, reverse=True)[:5]
+        with open("highscores.txt", "w") as file:
+            for score in self.highscores:
+                file.write(f"{score}\n")
 
     def generate_snake_path(self):
         path = []
@@ -99,17 +103,15 @@ class SnakeGame:
             (x, y - GRID_SIZE)
         ]
 
-    def a_star_longest(self, start, goal):
-        """A* modifiziert, um längere Wege zu bevorzugen"""
+    def a_star(self, start, goal):
         open_set = []
-        # Inverted f_score für längere Wege (negativ, um Maximum zu finden)
-        heappush(open_set, (0, 0, start))  # (f_score, g_score, pos)
+        heappush(open_set, (0, start))
         came_from = {}
-        g_score = {start: 0}  # Distanz vom Start
-        f_score = {start: -self.heuristic(start, goal)}  # Negativ für längere Wege
+        g_score = {start: 0}
+        f_score = {start: self.heuristic(start, goal)}
 
         while open_set:
-            _, g, current = heappop(open_set)
+            current = heappop(open_set)[1]
 
             if current == goal:
                 path = []
@@ -126,15 +128,11 @@ class SnakeGame:
                     continue
 
                 tentative_g_score = g_score[current] + GRID_SIZE
-                # Belohne längere Wege durch geringere Heuristik-Bewertung
-                h = self.heuristic(neighbor, goal)
-                if neighbor not in g_score or tentative_g_score > g_score[neighbor]:
+                if neighbor not in g_score or tentative_g_score < g_score[neighbor]:
                     came_from[neighbor] = current
                     g_score[neighbor] = tentative_g_score
-                    # Umgekehrtes Scoring: längere Wege = höherer negativer Wert
-                    f_score[neighbor] = tentative_g_score - h * 0.5  # Reduziere Heuristik-Einfluss
-                    heappush(open_set, (-f_score[neighbor], tentative_g_score, neighbor))
-        
+                    f_score[neighbor] = tentative_g_score + self.heuristic(neighbor, goal)
+                    heappush(open_set, (f_score[neighbor], neighbor))
         return None
 
     def follow_tail(self, head):
@@ -149,31 +147,7 @@ class SnakeGame:
                 if dist < min_dist:
                     min_dist = dist
                     best_neighbor = neighbor
-        if best_neighbor:
-            return best_neighbor
-        for neighbor in self.get_neighbors(head):
-            if (neighbor not in self.snake and 
-                0 <= neighbor[0] < WIDTH and 
-                0 <= neighbor[1] < HEIGHT):
-                return neighbor
-        return None
-
-    def find_safe_move(self, head):
-        """Finde einen sicheren Zug, der freie Räume maximiert"""
-        max_free = -1
-        best_move = None
-        for neighbor in self.get_neighbors(head):
-            if (neighbor not in self.snake and 
-                0 <= neighbor[0] < WIDTH and 
-                0 <= neighbor[1] < HEIGHT):
-                free_neighbors = sum(1 for n in self.get_neighbors(neighbor) 
-                                   if (n not in self.snake and 
-                                       0 <= n[0] < WIDTH and 
-                                       0 <= n[1] < HEIGHT))
-                if free_neighbors > max_free:
-                    max_free = free_neighbors
-                    best_move = neighbor
-        return best_move
+        return best_neighbor if best_neighbor else None
 
     def move(self):
         if self.auto_mode:
@@ -184,36 +158,51 @@ class SnakeGame:
     def auto_move(self):
         if len(self.snake) >= ROWS * COLS or self.game_over:
             self.game_over = True
+            self.save_highscores()
             return
 
         head = self.snake[0]
-        
-        # Schritt 1: Versuche, einen langen Weg zum Futter zu finden
-        path_to_food = self.a_star_longest(head, self.food)
-        if path_to_food and len(path_to_food) > 1:
-            new_head = path_to_food[1]
+        COVER_THRESHOLD = ROWS * COLS * 0.2  # 20% Abdeckung (120 Punkte)
+
+        if self.score < COVER_THRESHOLD:
+            # Aggressive Phase: Direkter Weg zum Futter
+            path_to_food = self.a_star(head, self.food)
+            if path_to_food and len(path_to_food) > 1:
+                new_head = path_to_food[1]
+            else:
+                new_head = self.follow_tail(head) or head
         else:
-            # Schritt 2: Folge dem Schwanz, wenn kein Weg zum Futter
-            new_head = self.follow_tail(head)
-            if not new_head:
-                # Schritt 3: Suche einen sicheren Zug mit maximalem Freiraum
-                new_head = self.find_safe_move(head)
-                if not new_head:
-                    # Schritt 4: Fallback auf systematischen Pfad
-                    try:
-                        path_index = self.path.index(head)
-                        next_index = (path_index + 1) % len(self.path)
-                        new_head = self.path[next_index]
-                        if new_head in self.snake[1:]:
-                            new_head = self.find_safe_move(head) or head
-                    except ValueError:
-                        new_head = self.find_safe_move(head) or head
+            # Sichere Phase: Systematischer Pfad mit Futter-Abweichung
+            next_index = (self.path_index + 1) % len(self.path)
+            next_path_pos = self.path[next_index]
+            
+            # Prüfe Grenzen und Kollision
+            if (next_path_pos[0] >= 0 and next_path_pos[0] < WIDTH and
+                next_path_pos[1] >= 0 and next_path_pos[1] < HEIGHT and
+                next_path_pos not in self.snake[1:]):
+                new_head = next_path_pos
+                self.path_index = next_index
+            else:
+                # Futter nahe?
+                food_distance = self.heuristic(head, self.food)
+                path_to_food = None
+                if food_distance <= GRID_SIZE * 5:  # Futter in 5 Schritten
+                    path_to_food = self.a_star(head, self.food)
+                
+                if path_to_food and len(path_to_food) > 1 and len(self.snake) < (ROWS * COLS * 0.9):
+                    new_head = path_to_food[1]
+                else:
+                    new_head = self.follow_tail(head)
+                    if not new_head:
+                        path_to_food = self.a_star(head, self.food)
+                        if path_to_food and len(path_to_food) > 1:
+                            new_head = path_to_food[1]
+                        else:
+                            new_head = head
 
         if new_head == head or new_head is None:
             self.game_over = True
-            if self.score > self.highscore:
-                self.highscore = self.score
-                self.save_highscore()
+            self.save_highscores()
             return
 
         color_index = min(self.score // 10, len(COLORS) - 1)
@@ -236,9 +225,7 @@ class SnakeGame:
             new_head[1] < 0 or new_head[1] >= HEIGHT or
             new_head in self.snake):
             self.game_over = True
-            if self.score > self.highscore:
-                self.highscore = self.score
-                self.save_highscore()
+            self.save_highscores()
             return
 
         color_index = min(self.score // 10, len(COLORS) - 1)
@@ -264,7 +251,9 @@ class SnakeGame:
         pygame.draw.rect(self.screen, RED, (*self.food, GRID_SIZE, GRID_SIZE))
 
         self.draw_text(f"Punkte: {self.score}", 10, 10, 24, WHITE)
-        self.draw_text(f"Highscore: {self.highscore}", WIDTH - 150, 10, 24, YELLOW)
+        self.draw_text("Top 5 High-Scores:", WIDTH - 200, 10, 24, YELLOW)
+        for i, score in enumerate(self.highscores):
+            self.draw_text(f"{i+1}. {score}", WIDTH - 200, 40 + i * 20, 20, YELLOW)
 
         if self.game_over:
             self.draw_text("Game Over!", WIDTH // 2 - 60, HEIGHT // 3, 32, WHITE)
@@ -320,7 +309,6 @@ class SnakeGame:
                     if self.game_over and event.type == pygame.MOUSEBUTTONDOWN:
                         if self.restart_button_rect.collidepoint(event.pos):
                             self.reset_game()
-                            in_start_screen = True
                             break
 
                 if not self.game_over:
