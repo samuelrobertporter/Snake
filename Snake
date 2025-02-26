@@ -9,6 +9,7 @@ HEIGHT = 400
 GRID_SIZE = 20
 ROWS = HEIGHT // GRID_SIZE
 COLS = WIDTH // GRID_SIZE
+TOTAL_CELLS = ROWS * COLS
 
 # Farben (RGB)
 BLACK = (0, 0, 0)
@@ -17,16 +18,6 @@ RED = (255, 0, 0)
 BLUE = (0, 0, 255)
 YELLOW = (255, 255, 0)
 GREEN = (0, 255, 0)
-
-# Zusätzliche Farben für die Schlange
-COLORS = [
-    (0, 255, 0),    # Grün (Startfarbe)
-    (255, 165, 0),  # Orange
-    (128, 0, 128),  # Lila
-    (0, 255, 255),  # Cyan
-    (255, 215, 0),  # Gold
-    (255, 20, 147), # Pink
-]
 
 # Richtungsvorgaben
 UP = (0, -1)
@@ -43,6 +34,7 @@ class SnakeGame:
 
         self.reset_game()
         self.highscores = self.load_highscores()
+        self.coverage_history = self.load_coverage_history()
 
         self.manual_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 - 40, 200, 40)
         self.auto_button_rect = pygame.Rect(WIDTH // 2 - 100, HEIGHT // 2 + 10, 200, 40)
@@ -51,13 +43,14 @@ class SnakeGame:
     def reset_game(self):
         self.running = True
         self.score = 0
-        self.snake = [(0, 0)]
-        self.snake_colors = [COLORS[0]]
         self.path = self.generate_snake_path()
+        self.snake = [self.path[0]]
         self.food = self.spawn_food()
         self.direction = RIGHT
         self.game_over = False
         self.path_index = 0
+        self.max_length = 1
+        self.safe_mode = False  # Flag für sicheren Modus
 
     def spawn_food(self):
         while True:
@@ -79,6 +72,27 @@ class SnakeGame:
         with open("highscores.txt", "w") as file:
             for score in self.highscores:
                 file.write(f"{score}\n")
+
+    def load_coverage_history(self):
+        if os.path.exists("coverage_history.txt"):
+            with open("coverage_history.txt", "r") as file:
+                history = [float(line.strip()) for line in file.readlines() if line.strip()]
+                return history[-10:]
+        return []
+
+    def save_coverage_history(self):
+        coverage = (self.max_length / TOTAL_CELLS) * 100
+        self.coverage_history.append(coverage)
+        if len(self.coverage_history) > 10:
+            self.coverage_history.pop(0)
+        with open("coverage_history.txt", "w") as file:
+            for cov in self.coverage_history:
+                file.write(f"{cov}\n")
+
+    def get_average_coverage(self):
+        if not self.coverage_history:
+            return 0.0
+        return sum(self.coverage_history) / len(self.coverage_history)
 
     def generate_snake_path(self):
         path = []
@@ -112,7 +126,6 @@ class SnakeGame:
 
         while open_set:
             current = heappop(open_set)[1]
-
             if current == goal:
                 path = []
                 while current in came_from:
@@ -147,7 +160,41 @@ class SnakeGame:
                 if dist < min_dist:
                     min_dist = dist
                     best_neighbor = neighbor
-        return best_neighbor if best_neighbor else None
+        return best_neighbor
+
+    def get_safe_next_step(self, head, target):
+        x, y = head
+        tx, ty = target
+        possible_steps = [
+            ((x + GRID_SIZE, y), RIGHT),
+            ((x - GRID_SIZE, y), LEFT),
+            ((x, y + GRID_SIZE), DOWN),
+            ((x, y - GRID_SIZE), UP)
+        ]
+        
+        valid_steps = []
+        for next_pos, direction in possible_steps:
+            if (0 <= next_pos[0] < WIDTH and 
+                0 <= next_pos[1] < HEIGHT and 
+                next_pos not in self.snake):
+                dist = self.heuristic(next_pos, target)
+                valid_steps.append((dist, next_pos, direction))
+        
+        if valid_steps:
+            valid_steps.sort()
+            return valid_steps[0][1]  # next_pos
+        return None
+
+    def find_closest_path_index(self, head):
+        """Finde den Index im Pfad, der der aktuellen Kopfposition am nächsten ist."""
+        min_dist = float('inf')
+        closest_index = 0
+        for i, pos in enumerate(self.path):
+            dist = self.heuristic(head, pos)
+            if dist < min_dist:
+                min_dist = dist
+                closest_index = i
+        return closest_index
 
     def move(self):
         if self.auto_mode:
@@ -159,62 +206,53 @@ class SnakeGame:
         if len(self.snake) >= ROWS * COLS or self.game_over:
             self.game_over = True
             self.save_highscores()
+            self.save_coverage_history()
             return
 
         head = self.snake[0]
-        COVER_THRESHOLD = ROWS * COLS * 0.2  # 20% Abdeckung (120 Punkte)
+        COVER_THRESHOLD = 100
 
-        if self.score < COVER_THRESHOLD:
-            # Aggressive Phase: Direkter Weg zum Futter
+        if not self.safe_mode:
+            # Aggressiver Modus: Zum Futter gehen
             path_to_food = self.a_star(head, self.food)
             if path_to_food and len(path_to_food) > 1:
                 new_head = path_to_food[1]
             else:
-                new_head = self.follow_tail(head) or head
+                new_head = self.get_safe_next_step(head, self.food)
+            if not new_head:
+                new_head = self.follow_tail(head)
         else:
-            # Sichere Phase: Systematischer Pfad mit Futter-Abweichung
-            next_index = (self.path_index + 1) % len(self.path)
-            next_path_pos = self.path[next_index]
-            
-            # Prüfe Grenzen und Kollision
-            if (next_path_pos[0] >= 0 and next_path_pos[0] < WIDTH and
-                next_path_pos[1] >= 0 and next_path_pos[1] < HEIGHT and
-                next_path_pos not in self.snake[1:]):
-                new_head = next_path_pos
-                self.path_index = next_index
+            # Sicherer Modus: Systematischen Pfad folgen
+            next_path_pos = self.path[(self.path_index + 1) % len(self.path)]
+            new_head = self.get_safe_next_step(head, next_path_pos)
+            if new_head:
+                self.path_index = (self.path_index + 1) % len(self.path)
             else:
-                # Futter nahe?
-                food_distance = self.heuristic(head, self.food)
-                path_to_food = None
-                if food_distance <= GRID_SIZE * 5:  # Futter in 5 Schritten
-                    path_to_food = self.a_star(head, self.food)
-                
-                if path_to_food and len(path_to_food) > 1 and len(self.snake) < (ROWS * COLS * 0.9):
-                    new_head = path_to_food[1]
-                else:
+                # Fallback: Zum Futter oder Schwanz gehen
+                new_head = self.get_safe_next_step(head, self.food)
+                if not new_head:
                     new_head = self.follow_tail(head)
-                    if not new_head:
-                        path_to_food = self.a_star(head, self.food)
-                        if path_to_food and len(path_to_food) > 1:
-                            new_head = path_to_food[1]
-                        else:
-                            new_head = head
 
-        if new_head == head or new_head is None:
+        # Prüfen, ob Bewegung gültig ist
+        if not new_head or new_head == head or new_head in self.snake:
+            print(f"Game Over bei Score {self.score}: new_head={new_head}, head={head}, in snake={new_head in self.snake}")
             self.game_over = True
             self.save_highscores()
+            self.save_coverage_history()
             return
 
-        color_index = min(self.score // 10, len(COLORS) - 1)
-        self.snake_colors.insert(0, COLORS[color_index])
         self.snake.insert(0, new_head)
 
         if new_head == self.food:
-            self.food = self.spawn_food()
             self.score += 1
+            self.food = self.spawn_food()
+            self.max_length = max(self.max_length, len(self.snake))
+            if self.score == COVER_THRESHOLD and not self.safe_mode:
+                self.safe_mode = True
+                self.path_index = self.find_closest_path_index(head)
+                print(f"Übergang zum sicheren Modus bei {self.score} Punkten, path_index={self.path_index}")
         else:
             self.snake.pop()
-            self.snake_colors.pop()
 
     def manual_move(self):
         head_x, head_y = self.snake[0]
@@ -226,18 +264,17 @@ class SnakeGame:
             new_head in self.snake):
             self.game_over = True
             self.save_highscores()
+            self.save_coverage_history()
             return
 
-        color_index = min(self.score // 10, len(COLORS) - 1)
-        self.snake_colors.insert(0, COLORS[color_index])
         self.snake.insert(0, new_head)
 
         if new_head == self.food:
             self.food = self.spawn_food()
             self.score += 1
+            self.max_length = max(self.max_length, len(self.snake))
         else:
             self.snake.pop()
-            self.snake_colors.pop()
 
     def draw_text(self, text, x, y, size=24, color=WHITE):
         font = pygame.font.Font(None, size)
@@ -246,11 +283,12 @@ class SnakeGame:
 
     def render(self):
         self.screen.fill(BLACK)
-        for i, segment in enumerate(self.snake):
-            pygame.draw.rect(self.screen, self.snake_colors[i], (*segment, GRID_SIZE, GRID_SIZE))
+        for segment in self.snake:
+            pygame.draw.rect(self.screen, GREEN, (*segment, GRID_SIZE, GRID_SIZE))
         pygame.draw.rect(self.screen, RED, (*self.food, GRID_SIZE, GRID_SIZE))
 
         self.draw_text(f"Punkte: {self.score}", 10, 10, 24, WHITE)
+        self.draw_text(f"Durchschn. Deckung (letzte 10): {self.get_average_coverage():.1f}%", 10, 40, 20, GREEN)
         self.draw_text("Top 5 High-Scores:", WIDTH - 200, 10, 24, YELLOW)
         for i, score in enumerate(self.highscores):
             self.draw_text(f"{i+1}. {score}", WIDTH - 200, 40 + i * 20, 20, YELLOW)
