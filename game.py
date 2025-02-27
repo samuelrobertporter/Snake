@@ -87,7 +87,8 @@ class SnakeGame:
         return []
 
     def save_coverage_history(self):
-        coverage = (len(self.visited) / TOTAL_CELLS) * 100
+        # Änderung: Deckung basiert jetzt auf der maximalen Länge der Schlange
+        coverage = (self.max_length / TOTAL_CELLS) * 100
         self.coverage_history.append(coverage)
         if len(self.coverage_history) > 10:
             self.coverage_history.pop(0)
@@ -147,7 +148,8 @@ class SnakeGame:
                 self.save_highscores()
                 self.save_last_scores()
                 self.save_coverage_history()
-                print(f"Log: Spielende erreicht, Score: {self.score}, Coverage: {(len(self.visited) / TOTAL_CELLS) * 100:.1f}%")
+                # Log-Anpassung: Zeigt die Deckung basierend auf max_length
+                print(f"Log: Spielende erreicht, Score: {self.score}, Coverage: {(self.max_length / TOTAL_CELLS) * 100:.1f}%")
             return
 
         head = self.snake[0]
@@ -267,7 +269,8 @@ class SnakeGame:
                 self.save_highscores()
                 self.save_last_scores()
                 self.save_coverage_history()
-                print(f"Log: Sackgasse oder Kollision bei {head}, new_head={new_head}, Coverage: {(len(self.visited) / TOTAL_CELLS) * 100:.1f}%")
+                # Log-Anpassung: Zeigt die Deckung basierend auf max_length
+                print(f"Log: Sackgasse oder Kollision bei {head}, new_head={new_head}, Coverage: {(self.max_length / TOTAL_CELLS) * 100:.1f}%")
             return
 
         # Schritt 7: Bewege Schlange
